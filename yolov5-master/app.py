@@ -37,11 +37,13 @@ class ObjectDetectionApp(QMainWindow):
 
         # Load YOLOv5 model
         self.model = torch.hub.load('ultralytics/yolov5', 'custom', path='runs/train/exp3/weights/best.pt')
-        # self.model.conf = 0.5  # Confidence threshold
 
         # Start capturing video
         self.cap = cv2.VideoCapture(0)
         self.timer.start(30)
+
+        # Store detections for interactivity
+        self.detections = []
 
     def update_frame(self):
         ret, frame = self.cap.read()
@@ -63,6 +65,9 @@ class ObjectDetectionApp(QMainWindow):
             results = self.model(cropped_frame)
             detections = results.pandas().xyxy[0]  # Pandas DataFrame with detections
 
+            # Clear previous detections
+            self.detections = []
+
             # Draw detections on the cropped frame
             for _, row in detections.iterrows():
                 # Get bounding box coordinates for the cropped image
@@ -73,6 +78,13 @@ class ObjectDetectionApp(QMainWindow):
                 y1_orig = y1 + y1_crop
                 x2_orig = x1 + x2_crop
                 y2_orig = y1 + y2_crop
+
+                # Store the bounding box and label
+                self.detections.append({
+                    'label': row['name'],
+                    'confidence': row['confidence'],
+                    'bbox': (x1_orig, y1_orig, x2_orig, y2_orig)
+                })
 
                 # Draw bounding boxes on the original frame
                 label = f"{row['name']} {row['confidence']:.2f}"
@@ -88,16 +100,29 @@ class ObjectDetectionApp(QMainWindow):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.start_point = (event.x(), event.y())
+            if self.selection_made:
+                # Check if the click is inside any detected bounding box
+                for detection in self.detections:
+                    x1, y1, x2, y2 = detection['bbox']
+                    if x1 <= event.x() <= x2 and y1 <= event.y() <= y2:
+                        print(f"Selected Object: {detection['label']}\nBounding Box: {detection['bbox']}")
+                        return
+            else:
+                self.start_point = (event.x(), event.y())
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.start_point:
             x1, y1 = self.start_point
             x2, y2 = event.x(), event.y()
-            self.selection_rect = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+            self.selection_rect = (min(x1, x2), min(y1, y2), max(x1, y2), max(y1, y2))
             self.selection_made = True  # Enable object detection after selection
             self.start_point = None
             self.update_frame()
+
+        elif event.button() == Qt.RightButton:
+            # Reset selection to allow new cropping
+            self.selection_rect = None
+            self.selection_made = False
 
     def closeEvent(self, event):
         self.cap.release()
