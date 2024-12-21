@@ -3,11 +3,13 @@ import cv2
 import torch
 import numpy as np
 from PyQt5.QtCore import Qt, QTimer, QPoint
-from PyQt5.QtGui import QImage, QPixmap, QPainter
+from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QMainWindow, QMessageBox
 import pathlib
-from pathlib import Path
+
 pathlib.PosixPath = pathlib.WindowsPath
+
+
 
 class ObjectDetectionApp(QMainWindow):
     def __init__(self):
@@ -23,7 +25,7 @@ class ObjectDetectionApp(QMainWindow):
         self.video_label.setStyleSheet("border: 1px solid black")
         self.selection_rect = None
         self.start_point = None
-        self.selection_made = False  # Flag to check if a selection is made
+        self.selection_made = False
 
         # QLabel to display object info
         self.info_label = QLabel(self)
@@ -36,18 +38,33 @@ class ObjectDetectionApp(QMainWindow):
         self.timer.timeout.connect(self.update_frame)
 
         # Load YOLOv5 model
-        self.model = torch.hub.load('ultralytics/yolov5', 'custom', path='runs/train/exp3/weights/best.pt')
+        try:
+            self.model = torch.hub.load('ultralytics/yolov5', 'custom', path='yolov5-master/runs/train/exp3/weights/best.pt')
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load YOLOv5 model: {e}")
+            sys.exit(1)
 
         # Start capturing video
         self.cap = cv2.VideoCapture(0)
+        if not self.cap.isOpened():
+            QMessageBox.critical(self, "Error", "Failed to access the webcam.")
+            sys.exit(1)
+
+        # Set camera resolution to 640x640
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
+
         self.timer.start(30)
 
-        # Store detections for interactivity
+        # Variables for detections and selection
         self.detections = []
+        self.selected_object = None
+
 
     def update_frame(self):
         ret, frame = self.cap.read()
-        if not ret:
+        if not ret or frame is None or frame.size == 0:
+            self.info_label.setText("Failed to capture video frame.")
             return
 
         # Draw selection rectangle if selected
@@ -57,41 +74,37 @@ class ObjectDetectionApp(QMainWindow):
 
         # Only perform YOLOv5 inference if a selection has been made
         if self.selection_made:
-            # Crop the frame to the selected region
             x1, y1, x2, y2 = self.selection_rect
             cropped_frame = frame[y1:y2, x1:x2]
 
-            # Perform YOLOv5 inference on the cropped section
-            results = self.model(cropped_frame)
-            detections = results.pandas().xyxy[0]  # Pandas DataFrame with detections
+            if cropped_frame.size == 0 or cropped_frame.shape[0] == 0 or cropped_frame.shape[1] == 0:
+                self.info_label.setText("Invalid selection area. Please select a valid region.")
+                return
 
-            # Clear previous detections
-            self.detections = []
+            try:
+                results = self.model(cropped_frame)
+                detections = results.pandas().xyxy[0]
+                self.detections = []
 
-            # Draw detections on the cropped frame
-            for _, row in detections.iterrows():
-                # Get bounding box coordinates for the cropped image
-                x1_crop, y1_crop, x2_crop, y2_crop = int(row['xmin']), int(row['ymin']), int(row['xmax']), int(row['ymax'])
+                for _, row in detections.iterrows():
+                    x1_crop, y1_crop, x2_crop, y2_crop = int(row['xmin']), int(row['ymin']), int(row['xmax']), int(row['ymax'])
+                    x1_orig, y1_orig, x2_orig, y2_orig = x1 + x1_crop, y1 + y1_crop, x1 + x2_crop, y1 + y2_crop
+                    self.detections.append({'bbox': (x1_orig, y1_orig, x2_orig, y2_orig), 'label': row['name'], 'confidence': row['confidence']})
 
-                # Adjust the bounding box to be relative to the original frame
-                x1_orig = x1 + x1_crop
-                y1_orig = y1 + y1_crop
-                x2_orig = x1 + x2_crop
-                y2_orig = y1 + y2_crop
+                    label = f"{row['name']} {row['confidence']:.2f}"
+                    cv2.rectangle(frame, (x1_orig, y1_orig), (x2_orig, y2_orig), (255, 0, 0), 2)
+                    cv2.putText(frame, label, (x1_orig, y1_orig - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
-                # Store the bounding box and label
-                self.detections.append({
-                    'label': row['name'],
-                    'confidence': row['confidence'],
-                    'bbox': (x1_orig, y1_orig, x2_orig, y2_orig)
-                })
+                if self.selected_object:
+                    x1_sel, y1_sel, x2_sel, y2_sel = self.selected_object['bbox']
+                    label = self.selected_object['label']
+                    cv2.rectangle(frame, (x1_sel, y1_sel), (x2_sel, y2_sel), (0, 255, 255), 2)
+                    self.info_label.setText(f"Selected: {label} ({x1_sel}, {y1_sel}) to ({x2_sel}, {y2_sel})")
 
-                # Draw bounding boxes on the original frame
-                label = f"{row['name']} {row['confidence']:.2f}"
-                cv2.rectangle(frame, (x1_orig, y1_orig), (x2_orig, y2_orig), (255, 0, 0), 2)
-                cv2.putText(frame, label, (x1_orig, y1_orig - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            except Exception as e:
+                self.info_label.setText(f"Inference error: {e}")
+                return
 
-        # Convert frame to QImage
         rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
@@ -100,32 +113,39 @@ class ObjectDetectionApp(QMainWindow):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            label_pos = self.video_label.pos()
+            frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            label_width, label_height = self.video_label.width(), self.video_label.height()
+            x, y = (event.x() - label_pos.x()) * frame_width // label_width, (event.y() - label_pos.y()) * frame_height // label_height
+
             if self.selection_made:
-                # Check if the click is inside any detected bounding box
                 for detection in self.detections:
                     x1, y1, x2, y2 = detection['bbox']
-                    if x1 <= event.x() <= x2 and y1 <= event.y() <= y2:
-                        print(f"Selected Object: {detection['label']}\nBounding Box: {detection['bbox']}")
+                    if x1 <= x <= x2 and y1 <= y <= y2:
+                        self.selected_object = detection
+                        self.info_label.setText(f"Selected: {detection['label']} ({x1}, {y1}) to ({x2}, {y2})")
                         return
-            else:
-                self.start_point = (event.x(), event.y())
+            self.start_point = QPoint(x, y)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.start_point:
-            x1, y1 = self.start_point
+            x, y = self.start_point.x(), self.start_point.y()
             x2, y2 = event.x(), event.y()
-            self.selection_rect = (min(x1, x2), min(y1, y2), max(x1, y2), max(y1, y2))
-            self.selection_made = True  # Enable object detection after selection
+            self.selection_rect = (min(x, x2), min(y, y2), max(x, x2), max(y, y2))
+            self.selection_made = True
             self.start_point = None
             self.update_frame()
 
         elif event.button() == Qt.RightButton:
-            # Reset selection to allow new cropping
             self.selection_rect = None
             self.selection_made = False
+            self.selected_object = None
+            self.info_label.setText("")
 
     def closeEvent(self, event):
         self.cap.release()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
