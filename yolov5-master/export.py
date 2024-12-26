@@ -54,7 +54,9 @@ import subprocess
 import sys
 import time
 import warnings
+import pathlib
 from pathlib import Path
+pathlib.PosixPath = pathlib.WindowsPath
 
 import pandas as pd
 import torch

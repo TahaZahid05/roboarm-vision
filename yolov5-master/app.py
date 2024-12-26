@@ -39,7 +39,7 @@ class ObjectDetectionApp(QMainWindow):
 
         # Load YOLOv5 model
         try:
-            self.model = torch.hub.load('ultralytics/yolov5', 'custom', path='yolov5-master/runs/train/exp3/weights/best.pt')
+            self.model = torch.hub.load('ultralytics/yolov5', 'custom', path='runs/train/exp2/weights/best.pt')
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load YOLOv5 model: {e}")
             sys.exit(1)
