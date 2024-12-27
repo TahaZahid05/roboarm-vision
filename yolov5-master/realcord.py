@@ -3,6 +3,7 @@ import cv2
 import torch
 import numpy as np
 import requests
+import glob
 from PyQt5.QtCore import Qt, QTimer, QPoint
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import QApplication, QLabel, QMainWindow, QMessageBox
@@ -46,12 +47,134 @@ class ObjectDetectionApp(QMainWindow):
         # IP Camera URL
         self.image_url = "http://192.168.0.36:8080/shot.jpg"  # Replace with your IP camera URL
 
+        self.camera_matrix, self.dist_coeffs, self.rvecs, self.tvecs = self.calibrate_camera("calibration_image")
+
         # Timer for video feed
         self.timer.start(30)
 
         # Variables for detections and selection
         self.detections = []
         self.selected_object = None
+
+    # def calibrate_camera(self, images_folder, pattern_size=(8, 6), square_size=0.0508):
+    #     """
+    #     Calibrate the camera using checkerboard images.
+        
+    #     :param images_folder: Path to folder containing checkerboard images.
+    #     :param pattern_size: Number of internal corners in the checkerboard (cols, rows).
+    #     :param square_size: Size of a square in your checkerboard (in meters).
+    #     :return: Camera matrix, distortion coefficients, rotation and translation vectors.
+    #     """
+    #     # Prepare object points for the checkerboard
+    #     objp = np.zeros((pattern_size[0] * pattern_size[1], 3), np.float32)
+    #     objp[:, :2] = np.mgrid[0:pattern_size[0], 0:pattern_size[1]].T.reshape(-1, 2)
+    #     objp *= square_size
+
+    #     # Arrays to store object points and image points
+    #     objpoints = []  # 3D points in real-world space
+    #     imgpoints = []  # 2D points in image plane
+
+    #     # Get all images in the folder
+    #     images = glob.glob(f"{images_folder}/*.jpg")
+
+    #     for fname in images:
+    #         img = cv2.imread(fname)
+    #         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    #         # Find the chessboard corners
+    #         ret, corners = cv2.findChessboardCorners(gray, pattern_size, None)
+
+    #         if ret:
+    #             objpoints.append(objp)
+    #             imgpoints.append(corners)
+
+    #             # Draw and display the corners
+    #             cv2.drawChessboardCorners(img, pattern_size, corners, ret)
+    #             cv2.imshow('Checkerboard', img)
+    #             cv2.waitKey(500)
+
+    #     cv2.destroyAllWindows()
+
+    #     # Calibrate the camera
+    #     ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
+
+    #     if ret:
+    #         print("Camera Matrix:\n", mtx)
+    #         print("\nDistortion Coefficients:\n", dist)
+    #         return mtx, dist, rvecs, tvecs
+    #     else:
+    #         print("Camera calibration failed.")
+    #         return None, None, None, None
+
+    def calibrate_camera(self,images_folder, checkerboard_size=(8, 6)):
+        # Define the dimensions of the checkerboard
+        CHECKERBOARD = checkerboard_size
+
+        # Stop the iteration when specified accuracy is reached
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+
+        # Vector for 3D points
+        threedpoints = []
+
+        # Vector for 2D points
+        twodpoints = []
+
+        # 3D points in real-world coordinates
+        objectp3d = np.zeros((1, CHECKERBOARD[0] * CHECKERBOARD[1], 3), np.float32)
+        objectp3d[0, :, :2] = np.mgrid[0:CHECKERBOARD[0], 0:CHECKERBOARD[1]].T.reshape(-1, 2)
+
+        # Extract the path of individual images in the given directory
+        images = glob.glob(f"{images_folder}/*.jpg")
+
+        for filename in images:
+            image = cv2.imread(filename)
+            grayColor = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+            # Find the chessboard corners
+            ret, corners = cv2.findChessboardCorners(grayColor, CHECKERBOARD,
+                                                    cv2.CALIB_CB_ADAPTIVE_THRESH +
+                                                    cv2.CALIB_CB_FAST_CHECK +
+                                                    cv2.CALIB_CB_NORMALIZE_IMAGE)
+
+            # If corners are detected, refine the pixel coordinates and add to points
+            if ret == True:
+                print(f"Corners detected in {filename}")
+                threedpoints.append(objectp3d)
+
+                # Refining pixel coordinates for given 2D points
+                corners2 = cv2.cornerSubPix(grayColor, corners, (11, 11), (-1, -1), criteria)
+
+                twodpoints.append(corners2)
+
+                # Draw and display the corners
+                image = cv2.drawChessboardCorners(image, CHECKERBOARD, corners2, ret)
+            else:
+                print(f"No corners detected in {filename}")
+
+            # Display the image with corners (optional)
+            cv2.imshow('img', image)
+            cv2.waitKey(0)
+
+        cv2.destroyAllWindows()
+
+        # Perform camera calibration
+        h, w = image.shape[:2]
+        ret, matrix, distortion, r_vecs, t_vecs = cv2.calibrateCamera(threedpoints, twodpoints, grayColor.shape[::-1], None, None)
+
+        # Display the calibration results
+        print("Camera matrix:")
+        print(matrix)
+
+        print("\nDistortion coefficients:")
+        print(distortion)
+
+        print("\nRotation Vectors:")
+        print(r_vecs)
+
+        print("\nTranslation Vectors:")
+        print(t_vecs)
+
+        return matrix, distortion, r_vecs, t_vecs
 
     def fetch_frame_from_ip_camera(self):
         try:
@@ -111,6 +234,14 @@ class ObjectDetectionApp(QMainWindow):
 
                 if self.selected_object:
                     x1_sel, y1_sel, x2_sel, y2_sel = self.selected_object['bbox']
+                    center_x = (x1_sel + x2_sel) // 2
+                    center_y = (y1_sel + y2_sel) // 2
+                    pixel_coords = np.array([center_x,center_y,1.35])
+                    camera_coords = np.linalg.inv(self.camera_matrix) @ pixel_coords
+                    X = camera_coords[0]
+                    Y = camera_coords[1]
+                    Z = 1.35
+                    print(f"Camera coordinates: ({X:.2f}, {Y:.2f}, {Z:.2f})")
                     label = self.selected_object['label']
                     cv2.rectangle(frame, (x1_sel, y1_sel), (x2_sel, y2_sel), (0, 255, 255), 2)
                     self.info_label.setText(f"Selected: {label} ({x1_sel}, {y1_sel}) to ({x2_sel}, {y2_sel})")
@@ -137,6 +268,14 @@ class ObjectDetectionApp(QMainWindow):
                     x1, y1, x2, y2 = detection['bbox']
                     print(x,y,x1,y1,x2,y2)
                     if x1 <= x <= x2 and y1 <= y <= y2:
+                        center_x = (x1 + x2) // 2
+                        center_y = (y1 + y2) // 2
+                        pixel_coords = np.array([center_x,center_y,1.35])
+                        camera_coords = np.linalg.inv(self.camera_matrix) @ pixel_coords
+                        X = camera_coords[0]
+                        Y = camera_coords[1]
+                        Z = 1.35
+                        print(f"Camera coordinates: ({X:.2f}, {Y:.2f}, {Z:.2f})")
                         self.selected_object = detection
                         self.info_label.setText(f"Selected: {detection['label']} ({x1}, {y1}) to ({x2}, {y2})")
                         self.update_frame()  # Update the frame with yellow border on selected object

@@ -44,8 +44,15 @@ class ObjectDetectionApp(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to load YOLOv5 model: {e}")
             sys.exit(1)
 
-        # IP Camera URL
-        self.image_url = "http://192.168.0.43:8080/shot.jpg"  # Replace with your IP camera URL
+        # RTSP Camera Stream URL
+        self.rtsp_url = "rtsp://192.168.0.36:8080/h264_ulaw.sdp"  # Replace with your RTSP camera URL
+
+        # Open video capture for RTSP stream
+        self.cap = cv2.VideoCapture(self.rtsp_url)
+        # self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        if not self.cap.isOpened():
+            QMessageBox.critical(self, "Error", f"Failed to open RTSP stream: {self.rtsp_url}")
+            sys.exit(1)
 
         # Camera calibration
         self.camera_matrix, self.dist_coeffs, _, _ = self.calibrate_camera("calibration_images")
@@ -59,17 +66,11 @@ class ObjectDetectionApp(QMainWindow):
 
     def fetch_frame_from_ip_camera(self):
         try:
-            # Fetch the image from the URL
-            response = requests.get(self.image_url, stream=True)
-            if not response.ok:
-                self.info_label.setText("Error: Unable to fetch image from IP camera.")
+            # Read a frame from the RTSP stream
+            ret, frame = self.cap.read()
+            if not ret:
+                self.info_label.setText("Error: Unable to fetch frame from RTSP stream.")
                 return None
-
-            # Convert the image to a NumPy array
-            image_array = np.array(bytearray(response.content), dtype=np.uint8)
-
-            # Decode the image to OpenCV format
-            frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
 
             # Resize the frame to 640x640
             frame_resized = cv2.resize(frame, (640, 640))
@@ -81,7 +82,7 @@ class ObjectDetectionApp(QMainWindow):
             return frame_resized
 
         except Exception as e:
-            self.info_label.setText(f"Error fetching IP camera frame: {e}")
+            self.info_label.setText(f"Error fetching RTSP camera frame: {e}")
             return None
 
     def update_frame(self):
@@ -251,6 +252,9 @@ class ObjectDetectionApp(QMainWindow):
             return None, None, None, None
 
         ...
+    def closeEvent(self, event):
+        # Release the RTSP stream when the application closes
+        self.cap.release()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
