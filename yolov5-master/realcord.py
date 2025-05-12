@@ -19,15 +19,19 @@ class ObjectDetectionApp(QMainWindow):
         self.setWindowTitle("YOLOv5 Object Detection")
         self.setGeometry(100, 100, 800, 700)
 
-        # QLabel to display video feed
+        # QLabel to display video feed (640 x 640 video feed)
         self.video_label = QLabel(self)
         self.video_label.setGeometry(10, 10, 640, 640)
         self.video_label.setStyleSheet("border: 1px solid black")
+        # selection_rect = rectangle drawn by the user
+        # start_point = initial point from where user starts drawing
+        # selection_made = Did the user select an object?
         self.selection_rect = None
         self.start_point = None
         self.selection_made = False
 
         # QLabel to display object info
+        # Displays camera coordinates in the application
         self.info_label = QLabel(self)
         self.info_label.setGeometry(10, 650, 780, 50)
         self.info_label.setStyleSheet("border: 1px solid black")
@@ -45,7 +49,7 @@ class ObjectDetectionApp(QMainWindow):
             sys.exit(1)
 
         # IP Camera URL
-        self.image_url = "http://192.168.0.36:8080/shot.jpg"  # Replace with your IP camera URL
+        self.image_url = "http://10.20.1.46:8080/shot.jpg"  # Replace with your IP camera URL
 
         self.camera_matrix, self.dist_coeffs, self.rvecs, self.tvecs = self.calibrate_camera("calibration_image")
 
@@ -192,7 +196,11 @@ class ObjectDetectionApp(QMainWindow):
 
             # Resize the frame to 640x640
             frame_resized = cv2.resize(frame, (640, 640))
-            return frame_resized
+
+            # Undistort using original camera matrix (no scaling needed)
+            undistorted_frame = cv2.undistort(frame_resized, self.camera_matrix, self.dist_coeffs)
+
+            return undistorted_frame
 
         except Exception as e:
             self.info_label.setText(f"Error fetching IP camera frame: {e}")
